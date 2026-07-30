@@ -40,6 +40,21 @@ def timestep_weighted_flow_loss(
     return weighted_loss
 
 
+def temporal_smoothness_loss(
+    noise_pred: torch.Tensor,
+) -> torch.Tensor:
+    """Mean squared difference between adjacent latent frames."""
+    if noise_pred.dim() != 5:
+        raise ValueError(
+            f"Expected [B,C,T,H,W] prediction, got {noise_pred.shape}"
+        )
+    if noise_pred.shape[2] <= 1:
+        return noise_pred.new_zeros(())
+    return (
+        noise_pred[:, :, 1:] - noise_pred[:, :, :-1]
+    ).square().mean()
+
+
 def control_adherence_loss(
     model: 'ControllableWAN',
     noisy_latent: torch.Tensor,
@@ -299,21 +314,30 @@ class MultiVideoTrainer:
                 control_features=controls,
             )
 
-        w_flow     = self.config.get('loss_flow_weight', 1.0)
-        w_weighted = self.config.get('loss_weighted_weight', 0.1)
+        w_flow = self.config.get('loss_flow_weight', 1.0)
+        w_weighted = self.config.get(
+            'loss_weighted_weight', 0.1
+        )
+        w_temporal = self.config.get(
+            'loss_temporal_weight', 0.05
+        )
 
-        loss_flow     = flow_matching_loss(noise_pred, target)
-        loss_weighted = timestep_weighted_flow_loss(noise_pred, target, timesteps)
-        total_loss    = w_flow * loss_flow + w_weighted * loss_weighted
+        loss_flow = flow_matching_loss(noise_pred, target)
+        loss_weighted = timestep_weighted_flow_loss(
+            noise_pred, target, timesteps
+        )
+        loss_temporal = temporal_smoothness_loss(noise_pred)
+        total_loss = (
+            w_flow * loss_flow
+            + w_weighted * loss_weighted
+            + w_temporal * loss_temporal
+        )
 
       
         gates = torch.sigmoid(self.base_model.control_adapter.modality_gates)
         gate_entropy = -(gates * torch.log(gates + 1e-8) +
                         (1 - gates) * torch.log(1 - gates + 1e-8)).mean()
 
-        pred_frames = noise_pred.reshape(B, -1, noise_pred.shape[-1] if noise_pred.dim()==3 else noise_pred.shape[1])
-        frame_diff = (pred_frames[:, 1:] - pred_frames[:, :-1]).pow(2).mean()
-        total_loss = total_loss + 0.05 * frame_diff                        
         # total_loss = total_loss + 0.01 * gate_entropy
 
         del noisy, noise_pred, controls
@@ -323,6 +347,10 @@ class MultiVideoTrainer:
             'loss':            total_loss.item(),
             'loss_flow':       loss_flow.item(),
             'loss_weighted':   loss_weighted.item(),
+            'loss_temporal':   loss_temporal.item(),
+            'loss_temporal_weighted': (
+                w_temporal * loss_temporal
+            ).item(),
             'adherence_delta': 0.0,   
             'lr_adapter':      self.optimizer.param_groups[0]['lr'],
             'lr_zero_conv':    self.optimizer.param_groups[1]['lr'],
@@ -449,11 +477,23 @@ class MultiVideoTrainer:
             )
 
         loss_flow = flow_matching_loss(noise_pred, target)
-        loss_weighted = timestep_weighted_flow_loss(noise_pred, target, timesteps)
+        loss_weighted = timestep_weighted_flow_loss(
+            noise_pred, target, timesteps
+        )
+        loss_temporal = temporal_smoothness_loss(noise_pred)
 
         w_flow = self.config.get('loss_flow_weight', 1.0)
-        w_weighted = self.config.get('loss_weighted_weight', 0.1)
-        total_loss = w_flow * loss_flow + w_weighted * loss_weighted
+        w_weighted = self.config.get(
+            'loss_weighted_weight', 0.1
+        )
+        w_temporal = self.config.get(
+            'loss_temporal_weight', 0.05
+        )
+        total_loss = (
+            w_flow * loss_flow
+            + w_weighted * loss_weighted
+            + w_temporal * loss_temporal
+        )
 
         del noisy, noise_pred, controls
 
@@ -461,6 +501,10 @@ class MultiVideoTrainer:
             'loss': total_loss.item(),
             'loss_flow': loss_flow.item(),
             'loss_weighted': loss_weighted.item(),
+            'loss_temporal': loss_temporal.item(),
+            'loss_temporal_weighted': (
+                w_temporal * loss_temporal
+            ).item(),
         }
 
     @torch.no_grad()
@@ -508,7 +552,7 @@ def main():
         'grad_accum_steps': 8,
         'mixed_precision':  True,
 
-        'num_frames':       2,
+        'num_frames':       8,
         'resolution':       (128, 128),
         'control_resolution': (16, 16),
 
@@ -518,14 +562,15 @@ def main():
 
         'loss_flow_weight':      1.0,
         'loss_weighted_weight':  0.1,
+        'loss_temporal_weight':  0.05,
         'loss_adherence_weight': 0.00,  
         'log_every':   10,
-        'save_every':  1000,
+        'save_every':  100,
         'val_every':   500,
 
-        'checkpoint_dir':  'checkpoints/multi_video',
-        'data_dir':        '/mnt/d1/controllable-generation',
-        'checkpoint_path': 'Wan2.2/Wan2.2-TI2V-5B',
+        'checkpoint_dir':  '/mnt/d1/jedidiah/checkpoints/depth_grid_fixed_full',
+        'data_dir':        '/mnt/d1/jedidiah/data_depth_repro',
+        'checkpoint_path': '/mnt/d1/jedidiah/models/Wan2.2-TI2V-5B',
     }
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

@@ -109,7 +109,11 @@ class ControllableWAN(nn.Module):
         print(f"{'='*70}\n")
 
     def _setup_control_hooks(self):
-        
+        self._current_wan_grid = None
+        self._grid_hook = self.wan.patch_embedding.register_forward_hook(
+            self._capture_wan_grid_hook
+        )
+
         self.hooks = []
         for hook_idx, layer_idx in enumerate(self.control_injection_layers):
             if layer_idx >= len(self.wan.blocks):
@@ -119,6 +123,12 @@ class ControllableWAN(nn.Module):
             hook = block.register_forward_pre_hook(self._control_injection_hook)
             self.hooks.append(hook)
 
+
+    def _capture_wan_grid_hook(self, module, inputs, output):
+        """Capture WAN's real post-patch temporal and spatial grid."""
+        self._current_wan_grid = tuple(
+            int(value) for value in output.shape[2:]
+        )
 
     def _control_injection_hook(self, module, input):
         if self._control_signal is None:
@@ -132,21 +142,46 @@ class ControllableWAN(nn.Module):
 
         if ctrl.shape[1] != L:
             B_c, S_c, C_c = ctrl.shape
+
+            if S_c % (16 * 16) != 0:
+                raise RuntimeError(
+                    f"Invalid control token count: {S_c}"
+                )
+
+            if self._current_wan_grid is None:
+                raise RuntimeError("WAN patch grid was not captured")
+
             T_c = S_c // (16 * 16)
+            T_real, H_real, W_real = self._current_wan_grid
+            real_length = T_real * H_real * W_real
 
-            if T_c > 0 and S_c % (16 * 16) == 0:
-              
-                hw = L // T_c
-                h = w = int(hw ** 0.5)
+            if real_length > L:
+                raise RuntimeError(
+                    f"WAN grid has {real_length} tokens but L={L}"
+                )
 
-                ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2)
-                ctrl = F.interpolate(ctrl.float(), size=(h, w), mode='bilinear', align_corners=False)
-                ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c * h * w, C_c)
+            ctrl = ctrl.reshape(
+                B_c, T_c, 16, 16, C_c
+            ).permute(0, 4, 1, 2, 3)
 
-            if ctrl.shape[1] != L:
-                ctrl = ctrl.permute(0, 2, 1)
-                ctrl = F.interpolate(ctrl.float(), size=L, mode='linear', align_corners=False)
-                ctrl = ctrl.permute(0, 2, 1)
+            ctrl = F.interpolate(
+                ctrl.float(),
+                size=(T_real, H_real, W_real),
+                mode="trilinear",
+                align_corners=False,
+            )
+
+            ctrl = ctrl.permute(
+                0, 2, 3, 4, 1
+            ).reshape(B_c, real_length, C_c)
+
+            if real_length < L:
+                padding = ctrl.new_zeros(
+                    B_c, L - real_length, C_c
+                )
+                ctrl = torch.cat([ctrl, padding], dim=1)
+
+            assert ctrl.shape[1] == L
 
         ctrl = zero_conv(ctrl)
 
