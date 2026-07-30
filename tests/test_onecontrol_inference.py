@@ -20,36 +20,84 @@ from src.depth_models.wan_controllable import ControllableWAN
 
 
 
-def load_midas(device):
+def load_midas(device, models_dir, midas_weights=None, allow_download=False):
+    """Load MiDaS the same way training control extraction does."""
+    models_dir = Path(models_dir)
+    if not models_dir.is_absolute():
+        models_dir = project_root / models_dir
+
+    weights_path = Path(midas_weights) if midas_weights else models_dir / "midas_v3_dpt_large.pth"
+    if not weights_path.is_absolute():
+        weights_path = project_root / weights_path
+
+    model_type = "DPT_Large"
     print("  Loading MiDaS DPT_Large...")
-    midas = torch.hub.load("intel-isl/MiDaS", "DPT_Large")
+    if weights_path.exists():
+        print(f"    Using local weights: {weights_path}")
+        try:
+            midas = torch.hub.load("intel-isl/MiDaS", model_type, pretrained=False)
+            checkpoint = torch.load(weights_path, map_location=device)
+            midas.load_state_dict(checkpoint)
+        except RuntimeError as e:
+            print("    WARNING: local MiDaS weights are incompatible with DPT_Large")
+            print(f"    {str(e).splitlines()[0]}")
+            print("    Falling back to torch.hub pretrained MiDaS")
+            midas = torch.hub.load("intel-isl/MiDaS", model_type)
+    elif allow_download:
+        print(f"    WARNING: local weights not found at {weights_path}")
+        print("    Falling back to torch.hub pretrained MiDaS")
+        midas = torch.hub.load("intel-isl/MiDaS", model_type)
+    else:
+        raise FileNotFoundError(
+            f"MiDaS weights not found at {weights_path}. "
+            "Pass --midas_weights, --models_dir, or --allow_midas_download."
+        )
+
     midas.to(device).eval()
     tf = torch.hub.load("intel-isl/MiDaS", "transforms").dpt_transform
     return midas, tf
 
 
-def extract_depth_frame(frame_bgr, midas, tf, device, hw=(128, 128)):
+def extract_depth_frame(frame_bgr, midas, tf, device, midas_hw=(360, 640), control_hw=(128, 128)):
+    """
+    Match training raw-MiDaS controls:
+    frame -> MiDaS -> per-frame uint8 depth at 360x640 -> resize to control_hw -> [0, 1].
+    """
     inp = tf(frame_bgr).to(device)
     with torch.no_grad():
         pred = midas(inp)
-        pred = F.interpolate(pred.unsqueeze(1), size=hw,
+        pred = F.interpolate(pred.unsqueeze(1), size=midas_hw,
                              mode="bicubic", align_corners=False).squeeze()
     d = pred.cpu().numpy().astype(np.float32)
-    return (d - d.min()) / (d.max() - d.min() + 1e-8)
+    d = (d - d.min()) / (d.max() - d.min() + 1e-8)
+    d = (d * 255).astype(np.uint8)
+    d = cv2.resize(d, (control_hw[1], control_hw[0]), interpolation=cv2.INTER_LINEAR)
+    return d.astype(np.float32) / 255.0
 
 
-def extract_depth_sequence(video_path, midas, tf, device, num_frames=8, hw=(128, 128)):
+def extract_depth_sequence(
+    video_path,
+    midas,
+    tf,
+    device,
+    num_frames=8,
+    midas_hw=(360, 640),
+    control_hw=(128, 128),
+):
     cap   = cv2.VideoCapture(str(video_path))
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total <= 0:
+        cap.release()
+        raise RuntimeError(f"Could not read frames from {video_path}")
     idxs  = np.linspace(0, total - 1, num_frames, dtype=int)
     depths = []
     for idx in idxs:
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
         ret, frame = cap.read()
         if not ret:
-            depths.append(depths[-1] if depths else np.zeros(hw, np.float32))
+            depths.append(depths[-1] if depths else np.zeros(control_hw, np.float32))
             continue
-        depths.append(extract_depth_frame(frame, midas, tf, device, hw))
+        depths.append(extract_depth_frame(frame, midas, tf, device, midas_hw, control_hw))
     cap.release()
     return np.stack(depths) 
 
@@ -74,26 +122,99 @@ def deactivate_adapter(controllable_wan):
     """Clear control signal — WAN runs without adapter."""
     controllable_wan._control_signal = None
 
+
+def describe_video_tensor(name, video_tensor):
+    v = video_tensor.detach().float()
+    print(
+        f"  {name} tensor: shape={tuple(video_tensor.shape)} "
+        f"dtype={video_tensor.dtype} device={video_tensor.device} "
+        f"min={v.nan_to_num().min().item():.4f} "
+        f"max={v.nan_to_num().max().item():.4f} "
+        f"mean={v.nan_to_num().mean().item():.4f} "
+        f"nan={torch.isnan(v).any().item()} inf={torch.isinf(v).any().item()}"
+    )
+
+
+def video_to_bcthw(video_tensor):
+    """Normalize WAN output variants to (B, C, T, H, W)."""
+    if video_tensor.dim() == 5:
+        if video_tensor.shape[1] in (1, 3):
+            return video_tensor
+        if video_tensor.shape[2] in (1, 3):
+            return video_tensor.permute(0, 2, 1, 3, 4).contiguous()
+    elif video_tensor.dim() == 4:
+        if video_tensor.shape[0] in (1, 3):
+            return video_tensor.unsqueeze(0)
+        if video_tensor.shape[1] in (1, 3):
+            return video_tensor.permute(1, 0, 2, 3).unsqueeze(0).contiguous()
+
+    raise ValueError(f"Unexpected video tensor shape: {tuple(video_tensor.shape)}")
+
+
 def tensor_to_frames(video_tensor):
     """
-    WAN generate() returns (C, T, H, W) in [-1, 1].
+    WAN generate() returns video in [-1, 1].
     Returns (T, H, W, 3) uint8 RGB.
     """
-    v = video_tensor.float()
+    v = video_to_bcthw(video_tensor)[0].float()
     v = (v.clamp(-1, 1) + 1) / 2 * 255
     v = v.permute(1, 2, 3, 0).cpu().numpy().astype(np.uint8)
     return v
 
 
-def save_video(frames, path, fps=16):
-    T, H, W, _ = frames.shape
-    writer = cv2.VideoWriter(
-        str(path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (W, H)
-    )
-    for f in frames:
-        writer.write(cv2.cvtColor(f, cv2.COLOR_RGB2BGR))
-    writer.release()
-    print(f"    Saved: {path}  ({T} frames @ {fps} fps)")
+def save_rgb_video(frames, path, fps=16):
+    """Save known-good RGB uint8 frames with a broadly compatible H.264 encode."""
+    frames = np.asarray(frames)
+    if frames.dtype != np.uint8:
+        frames = np.clip(frames, 0, 255).astype(np.uint8)
+    if frames.ndim != 4 or frames.shape[-1] != 3:
+        raise ValueError(f"Expected RGB frames (T, H, W, 3), got {frames.shape}")
+
+    # yuv420p H.264 needs even dimensions. Edge padding avoids resizing artifacts.
+    pad_h = frames.shape[1] % 2
+    pad_w = frames.shape[2] % 2
+    if pad_h or pad_w:
+        frames = np.pad(
+            frames,
+            ((0, 0), (0, pad_h), (0, pad_w), (0, 0)),
+            mode='edge',
+        )
+    frames = np.ascontiguousarray(frames)
+
+    try:
+        import imageio.v2 as imageio
+        imageio.mimsave(
+            str(path),
+            list(frames),
+            fps=fps,
+            codec='libx264',
+            quality=8,
+            macro_block_size=1,
+            ffmpeg_params=['-pix_fmt', 'yuv420p', '-movflags', '+faststart'],
+        )
+        print(f"    Saved: {path}  ({len(frames)} RGB frames @ {fps} fps, libx264/yuv420p)")
+    except Exception as e:
+        fallback_path = Path(path).with_suffix('.avi')
+        print(f"    WARNING: H.264 encode failed ({e}); writing MJPG AVI: {fallback_path}")
+        T, H, W, _ = frames.shape
+        writer = cv2.VideoWriter(
+            str(fallback_path), cv2.VideoWriter_fourcc(*'MJPG'), fps, (W, H)
+        )
+        for frame in frames:
+            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        writer.release()
+        print(f"    Saved fallback: {fallback_path}  ({T} frames @ {fps} fps)")
+
+
+def save_debug_frames(frames, output_dir, prefix):
+    for idx in sorted({0, len(frames) // 2, len(frames) - 1}):
+        path = output_dir / f"{prefix}_frame_{idx:03d}.png"
+        Image.fromarray(frames[idx]).save(path)
+        print(f"    Saved debug frame: {path}")
+
+
+def save_comparison_video(frames, path, fps=16):
+    save_rgb_video(frames, path, fps=fps)
 
 
 def depth_to_rgb(depth_seq, target_hw):
@@ -128,11 +249,8 @@ def make_comparison_video(depth_frames, base_frames, ctrl_frames, path, fps=16):
     fscale = 0.55
     fthick = 1
     labels = ["Depth (ref video)", "Base WAN (no control)", "Controlled WAN"]
-    bgs    = [(40, 40, 40), (20, 60, 20), (20, 20, 80)]  # BGR
-
-    writer = cv2.VideoWriter(
-        str(path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (canvas_w, canvas_h)
-    )
+    bgs    = [(40, 40, 40), (20, 60, 20), (80, 20, 20)]  # RGB
+    rows = []
 
     for i in range(T):
         row = np.zeros((canvas_h, canvas_w, 3), np.uint8)
@@ -145,10 +263,10 @@ def make_comparison_video(depth_frames, base_frames, ctrl_frames, path, fps=16):
                         (max(0, (W - tw) // 2), (label_h + th) // 2 - 2),
                         font, fscale, (220, 220, 220), fthick, cv2.LINE_AA)
             row[:label_h, x0:x0 + W] = strip
-            row[label_h:, x0:x0 + W] = cv2.cvtColor(panel, cv2.COLOR_RGB2BGR)
-        writer.write(row)
+            row[label_h:, x0:x0 + W] = panel
+        rows.append(row)
 
-    writer.release()
+    save_rgb_video(np.stack(rows), path, fps=fps)
     print(f"    Saved: {path}  ({T} frames, side-by-side)")
 
 
@@ -175,8 +293,19 @@ def parse_args():
     p.add_argument('--depth_hw',    type=int,   nargs=2, default=[128, 128],
                    metavar=('H', 'W'),
                    help='Resolution for depth control tensor — match training')
+    p.add_argument('--midas_target_hw', type=int, nargs=2, default=[360, 640],
+                   metavar=('H', 'W'),
+                   help='Intermediate MiDaS depth size used before raw-depth control resize')
+    p.add_argument('--models_dir', default='models',
+                   help='Directory containing midas_v3_dpt_large.pth')
+    p.add_argument('--midas_weights', default=None,
+                   help='Explicit path to midas_v3_dpt_large.pth')
+    p.add_argument('--allow_midas_download', action='store_true',
+                   help='Fallback to torch.hub pretrained MiDaS if local weights are missing')
     p.add_argument('--offload',     action='store_true', default=True,
                    help='Offload WAN to CPU between steps (saves VRAM)')
+    p.add_argument('--no_offload',  dest='offload', action='store_false',
+                   help='Keep WAN resident on GPU during generation')
     return p.parse_args()
 
 
@@ -199,6 +328,7 @@ def main():
     print(f"  size       : {args.size}  |  frame_num : {args.frame_num}")
     print(f"  steps      : {args.steps}  |  guidance  : {args.guidance}")
     print(f"  seed       : {args.seed}  |  depth_hw  : {depth_hw}")
+    print(f"  midas_hw   : {tuple(args.midas_target_hw)}")
     print(f"  output_dir : {out_dir}")
     print("="*70 + "\n")
 
@@ -206,10 +336,17 @@ def main():
 
    
     print("[1/4] Extracting depth from reference video...")
-    midas, midas_tf = load_midas(device)
+    midas, midas_tf = load_midas(
+        device=device,
+        models_dir=args.models_dir,
+        midas_weights=args.midas_weights,
+        allow_download=args.allow_midas_download,
+    )
     depth_seq = extract_depth_sequence(
         args.ref_video, midas, midas_tf, device,
-        num_frames=args.frame_num, hw=depth_hw,
+        num_frames=args.frame_num,
+        midas_hw=tuple(args.midas_target_hw),
+        control_hw=depth_hw,
     )
     print(f"  depth shape : {depth_seq.shape}  "
           f"min={depth_seq.min():.3f}  max={depth_seq.max():.3f}")
@@ -217,28 +354,7 @@ def main():
     torch.cuda.empty_cache()
     gc.collect()
 
-    control_features = {
-        'depth_encoded': depth_to_control_tensor(depth_seq, device)
-    }
-    print(f"  control tensor : {control_features['depth_encoded'].shape}")
-
-    print("\n[2/4] Loading ControllableWAN...")
-    ctrl_model = ControllableWAN(checkpoint_dir=args.wan_dir, device=device)
-    ctrl_model.eval()
-
-    print(f"\n[3/4] Loading checkpoint: {args.checkpoint}")
-    ckpt = torch.load(args.checkpoint, map_location=device)
-    ctrl_model.control_adapter.load_state_dict(ckpt['model'])
-    if 'zero_convs' in ckpt:
-        ctrl_model.zero_convs.load_state_dict(ckpt['zero_convs'])
-        print("  Loaded adapter + zero_convs")
-    else:
-        print("  WARNING: no zero_convs key in checkpoint")
-    print(f"  step={ckpt.get('global_step','?')}  "
-          f"best_val_loss={ckpt.get('best_val_loss','?')}")
-
-
-    print("\n[4/4] Building WanTI2V pipeline...")
+    print("\n[2/4] Building WanTI2V pipeline...")
     wan_pipeline = wan.WanTI2V(
         config=cfg,
         checkpoint_dir=args.wan_dir,
@@ -248,18 +364,40 @@ def main():
        
     )
 
-   
-    original_wan_model  = wan_pipeline.model
-    wan_pipeline.model  = ctrl_model.wan
+    print("  Freeing pipeline vanilla DiT before loading ControllableWAN...")
+    wan_pipeline.model.to('cpu')
+    del wan_pipeline.model
+    wan_pipeline.model = None
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    print("\n[3/4] Loading ControllableWAN...")
+    ctrl_model = ControllableWAN(checkpoint_dir=args.wan_dir, device=device)
+    ctrl_model.eval()
+
+    print(f"\n[4/4] Loading checkpoint: {args.checkpoint}")
+    ckpt = torch.load(args.checkpoint, map_location=device)
+    ctrl_model.control_adapter.load_state_dict(ckpt['model'])
+    if 'zero_convs' in ckpt:
+        ctrl_model.zero_convs.load_state_dict(ckpt['zero_convs'])
+        print("  Loaded adapter + zero_convs")
+    else:
+        print("  WARNING: no zero_convs key in checkpoint")
+    print(f"  step={ckpt.get('global_step','?')}  "
+          f"best_val_loss={ckpt.get('best_val_loss','?')}")
+    del ckpt
+    torch.cuda.empty_cache()
+
+    wan_pipeline.model = ctrl_model.wan
     print("  Pipeline DiT swapped → ControllableWAN.wan (hooks active)")
 
     ref_image = Image.open(args.ref_image).convert("RGB")
 
     print("\n" + "-"*60)
-    print("Run A — BASE  (vanilla WAN, _control_signal = None)")
+    print("Run A — BASE  (ControllableWAN, _control_signal = None)")
     print("-"*60)
 
-    deactivate_adapter(ctrl_model)  
+    deactivate_adapter(ctrl_model)
 
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
@@ -278,16 +416,24 @@ def main():
             offload_model=args.offload,
         )
 
+    describe_video_tensor("base", video_base)
     frames_base = tensor_to_frames(video_base)
     path_base   = out_dir / "base.mp4"
-    save_video(frames_base, path_base, fps=args.fps)
+    save_rgb_video(frames_base, path_base, fps=args.fps)
+    save_debug_frames(frames_base, out_dir, "base")
     del video_base
     torch.cuda.empty_cache()
+    gc.collect()
 
     
     print("\n" + "-"*60)
     print("Run B — CONTROLLED  (depth adapter active)")
     print("-"*60)
+
+    control_features = {
+        'depth_encoded': depth_to_control_tensor(depth_seq, device)
+    }
+    print(f"  control tensor : {control_features['depth_encoded'].shape}")
 
     activate_adapter(ctrl_model, control_features)
 
@@ -309,14 +455,13 @@ def main():
         )
 
     deactivate_adapter(ctrl_model) 
+    describe_video_tensor("controlled", video_ctrl)
     frames_ctrl = tensor_to_frames(video_ctrl)
     path_ctrl   = out_dir / "controlled.mp4"
-    save_video(frames_ctrl, path_ctrl, fps=args.fps)
+    save_rgb_video(frames_ctrl, path_ctrl, fps=args.fps)
+    save_debug_frames(frames_ctrl, out_dir, "controlled")
     del video_ctrl
     torch.cuda.empty_cache()
-
-   
-    wan_pipeline.model = original_wan_model
 
    
     print("\n  Building side-by-side comparison...")
