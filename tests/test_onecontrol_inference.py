@@ -306,6 +306,16 @@ def parse_args():
                    help='Offload WAN to CPU between steps (saves VRAM)')
     p.add_argument('--no_offload',  dest='offload', action='store_false',
                    help='Keep WAN resident on GPU during generation')
+    p.add_argument(
+        '--control_strengths',
+        type=float,
+        nargs='+',
+        default=[0.5],
+        help=(
+            'Residual strengths evaluated using one shared Base WAN run; '
+            'default: 0.5'
+        ),
+    )
     return p.parse_args()
 
 
@@ -389,6 +399,12 @@ def main():
     torch.cuda.empty_cache()
 
     wan_pipeline.model = ctrl_model.wan
+
+    if not args.offload:
+        print("  Moving swapped ControllableWAN DiT to GPU...")
+        wan_pipeline.model.to(device)
+        torch.cuda.empty_cache()
+
     print("  Pipeline DiT swapped → ControllableWAN.wan (hooks active)")
 
     ref_image = Image.open(args.ref_image).convert("RGB")
@@ -435,55 +451,89 @@ def main():
     }
     print(f"  control tensor : {control_features['depth_encoded'].shape}")
 
-    activate_adapter(ctrl_model, control_features)
-
-    torch.manual_seed(args.seed)   
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
-
-    with torch.no_grad():
-        video_ctrl = wan_pipeline.generate(
-            args.prompt,
-            img=ref_image,
-            size=SIZE_CONFIGS[args.size],
-            max_area=MAX_AREA_CONFIGS[args.size],
-            frame_num=args.frame_num,
-            sampling_steps=args.steps,
-            guide_scale=args.guidance,
-            seed=args.seed,
-            offload_model=args.offload,
-        )
-
-    deactivate_adapter(ctrl_model) 
-    describe_video_tensor("controlled", video_ctrl)
-    frames_ctrl = tensor_to_frames(video_ctrl)
-    path_ctrl   = out_dir / "controlled.mp4"
-    save_rgb_video(frames_ctrl, path_ctrl, fps=args.fps)
-    save_debug_frames(frames_ctrl, out_dir, "controlled")
-    del video_ctrl
-    torch.cuda.empty_cache()
-
-   
-    print("\n  Building side-by-side comparison...")
+    strengths = [float(value) for value in args.control_strengths]
+    if any(value < 0 for value in strengths):
+        raise ValueError("Control strengths must be non-negative")
 
     T_out = frames_base.shape[0]
-    if len(depth_seq) != T_out:
-        idxs      = np.linspace(0, len(depth_seq) - 1, T_out, dtype=int)
-        depth_seq = depth_seq[idxs]
+    depth_for_comparison = depth_seq
+    if len(depth_for_comparison) != T_out:
+        idxs = np.linspace(
+            0, len(depth_for_comparison) - 1, T_out, dtype=int
+        )
+        depth_for_comparison = depth_for_comparison[idxs]
 
     depth_rgb = depth_to_rgb(
-        depth_seq,
-        target_hw=(frames_base.shape[1], frames_base.shape[2])
+        depth_for_comparison,
+        target_hw=(frames_base.shape[1], frames_base.shape[2]),
     )
-    path_cmp = out_dir / "comparison.mp4"
-    make_comparison_video(depth_rgb, frames_base, frames_ctrl, path_cmp, fps=args.fps)
+
+    activate_adapter(ctrl_model, control_features)
+    result_paths = []
+
+    for strength in strengths:
+        tag = f"{strength:g}".replace(".", "p")
+        ctrl_model._control_strength = strength
+
+        print("\n" + "-" * 60)
+        print(f"CONTROLLED strength={strength:g}")
+        print("-" * 60)
+
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+
+        with torch.no_grad():
+            video_ctrl = wan_pipeline.generate(
+                args.prompt,
+                img=ref_image,
+                size=SIZE_CONFIGS[args.size],
+                max_area=MAX_AREA_CONFIGS[args.size],
+                frame_num=args.frame_num,
+                sampling_steps=args.steps,
+                guide_scale=args.guidance,
+                seed=args.seed,
+                offload_model=args.offload,
+            )
+
+        describe_video_tensor(
+            f"controlled strength={strength:g}", video_ctrl
+        )
+        frames_ctrl = tensor_to_frames(video_ctrl)
+
+        path_ctrl = out_dir / f"controlled_strength_{tag}.mp4"
+        save_rgb_video(frames_ctrl, path_ctrl, fps=args.fps)
+        save_debug_frames(
+            frames_ctrl,
+            out_dir,
+            f"controlled_strength_{tag}",
+        )
+
+        path_cmp = out_dir / f"comparison_strength_{tag}.mp4"
+        make_comparison_video(
+            depth_rgb,
+            frames_base,
+            frames_ctrl,
+            path_cmp,
+            fps=args.fps,
+        )
+
+        result_paths.append((strength, path_ctrl, path_cmp))
+
+        del video_ctrl, frames_ctrl
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    deactivate_adapter(ctrl_model)
 
     
     print("\n" + "="*70)
     print("Done")
     print(f"  base.mp4        : {path_base}")
-    print(f"  controlled.mp4  : {path_ctrl}")
-    print(f"  comparison.mp4  : {path_cmp}  ← start here")
+    for strength, controlled_path, comparison_path in result_paths:
+        print(f"  strength={strength:g}")
+        print(f"    controlled : {controlled_path}")
+        print(f"    comparison : {comparison_path}")
     print("="*70)
     print("\nWhat to look for:")
     print("  Depth col    — depth signal fed to adapter (plasma colourmap)")

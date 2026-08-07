@@ -568,8 +568,8 @@ def main():
         'save_every':  100,
         'val_every':   500,
 
-        'checkpoint_dir':  '/mnt/d1/jedidiah/checkpoints/depth_grid_fixed_full',
-        'data_dir':        '/mnt/d1/jedidiah/data_depth_repro',
+        'checkpoint_dir':  '/mnt/d1/jedidiah/checkpoints/depth_grid_fixed_docx',
+        'data_dir':        '/mnt/d1/jedidiah/data_depth_repro_docx',
         'checkpoint_path': '/mnt/d1/jedidiah/models/Wan2.2-TI2V-5B',
     }
 

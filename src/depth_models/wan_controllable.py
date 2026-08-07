@@ -191,6 +191,12 @@ class ControllableWAN(nn.Module):
         if ctrl_norm > 0:
             ctrl = ctrl * (x_norm / ctrl_norm).clamp(max=1.0) * 0.1
 
+        # Default 1.0 preserves the checkpoint's original behavior.
+        control_strength = float(
+            getattr(self, "_control_strength", 1.0)
+        )
+        ctrl = ctrl * control_strength
+
         x = x + ctrl
         return (x,) + input[1:]
 
