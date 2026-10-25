@@ -1,0 +1,637 @@
+{
+  "case_id": "duplicate_candidates",
+  "image": {
+    "height": 100,
+    "width": 160,
+    "channels": 3,
+    "dtype": "uint8",
+    "colour_order": "RGB",
+    "fill": 0
+  },
+  "model_info": {
+    "kind": "simulated",
+    "pipeline_id": "pose_wrapper_demo_v1"
+  },
+  "reviewed_boxes": null,
+  "detector_outputs": [
+    {
+      "box_xyxy": [
+        40,
+        20,
+        120,
+        80
+      ],
+      "score_raw": 0.93
+    },
+    {
+      "box_xyxy": [
+        40,
+        20,
+        120,
+        80
+      ],
+      "score_raw": 0.93
+    }
+  ],
+  "estimator_outputs": [
+    {
+      "joint_names": [
+        "right_ankle",
+        "left_ankle",
+        "right_knee",
+        "left_knee",
+        "right_hip",
+        "left_hip",
+        "right_wrist",
+        "left_wrist",
+        "right_elbow",
+        "left_elbow",
+        "right_shoulder",
+        "left_shoulder",
+        "right_ear",
+        "left_ear",
+        "right_eye",
+        "left_eye",
+        "nose"
+      ],
+      "xy": [
+        [
+          70,
+          50
+        ],
+        null,
+        [
+          25,
+          30
+        ],
+        [
+          15,
+          30
+        ],
+        [
+          25,
+          25
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          40,
+          25
+        ],
+        [
+          0,
+          25
+        ],
+        [
+          35,
+          20
+        ],
+        [
+          5,
+          20
+        ],
+        [
+          30,
+          15
+        ],
+        [
+          10,
+          15
+        ],
+        [
+          25,
+          5
+        ],
+        [
+          15,
+          5
+        ],
+        [
+          22,
+          4
+        ],
+        [
+          18,
+          4
+        ],
+        [
+          20,
+          5
+        ]
+      ],
+      "scores_raw": [
+        0.9,
+        0.4,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        -0.2,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        1.2
+      ],
+      "coordinate_space": "model_pixels",
+      "to_original": [
+        [
+          2,
+          0,
+          40
+        ],
+        [
+          0,
+          2,
+          20
+        ]
+      ]
+    },
+    {
+      "joint_names": [
+        "right_ankle",
+        "left_ankle",
+        "right_knee",
+        "left_knee",
+        "right_hip",
+        "left_hip",
+        "right_wrist",
+        "left_wrist",
+        "right_elbow",
+        "left_elbow",
+        "right_shoulder",
+        "left_shoulder",
+        "right_ear",
+        "left_ear",
+        "right_eye",
+        "left_eye",
+        "nose"
+      ],
+      "xy": [
+        [
+          70,
+          50
+        ],
+        null,
+        [
+          25,
+          30
+        ],
+        [
+          15,
+          30
+        ],
+        [
+          25,
+          25
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          40,
+          25
+        ],
+        [
+          0,
+          25
+        ],
+        [
+          35,
+          20
+        ],
+        [
+          5,
+          20
+        ],
+        [
+          30,
+          15
+        ],
+        [
+          10,
+          15
+        ],
+        [
+          25,
+          5
+        ],
+        [
+          15,
+          5
+        ],
+        [
+          22,
+          4
+        ],
+        [
+          18,
+          4
+        ],
+        [
+          20,
+          5
+        ]
+      ],
+      "scores_raw": [
+        0.9,
+        0.4,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        -0.2,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        1.2
+      ],
+      "coordinate_space": "model_pixels",
+      "to_original": [
+        [
+          2,
+          0,
+          40
+        ],
+        [
+          0,
+          2,
+          20
+        ]
+      ]
+    }
+  ],
+  "expected_calls": {
+    "detector": 1,
+    "estimator": 1
+  },
+  "expected": {
+    "width": 160,
+    "height": 100,
+    "status": "completed",
+    "candidates": [
+      {
+        "candidate_id": "candidate_0",
+        "box_xyxy": [
+          40,
+          20,
+          120,
+          80
+        ],
+        "box_source": "detector",
+        "detector_score_raw": 0.93,
+        "joint_names": [
+          "nose",
+          "left_eye",
+          "right_eye",
+          "left_ear",
+          "right_ear",
+          "left_shoulder",
+          "right_shoulder",
+          "left_elbow",
+          "right_elbow",
+          "left_wrist",
+          "right_wrist",
+          "left_hip",
+          "right_hip",
+          "left_knee",
+          "right_knee",
+          "left_ankle",
+          "right_ankle"
+        ],
+        "xy_pixels": [
+          [
+            80,
+            30
+          ],
+          [
+            76,
+            28
+          ],
+          [
+            84,
+            28
+          ],
+          [
+            70,
+            30
+          ],
+          [
+            90,
+            30
+          ],
+          [
+            60,
+            50
+          ],
+          [
+            100,
+            50
+          ],
+          [
+            50,
+            60
+          ],
+          [
+            110,
+            60
+          ],
+          [
+            40,
+            70
+          ],
+          [
+            120,
+            70
+          ],
+          [
+            70,
+            70
+          ],
+          [
+            90,
+            70
+          ],
+          [
+            70,
+            80
+          ],
+          [
+            90,
+            80
+          ],
+          null,
+          null
+        ],
+        "joint_scores_raw": [
+          1.2,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          -0.2,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.4,
+          0.9
+        ],
+        "invalid_reasons": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "model_missing",
+          "outside_frame"
+        ],
+        "diagnostics": {
+          "source_joint_names": [
+            "right_ankle",
+            "left_ankle",
+            "right_knee",
+            "left_knee",
+            "right_hip",
+            "left_hip",
+            "right_wrist",
+            "left_wrist",
+            "right_elbow",
+            "left_elbow",
+            "right_shoulder",
+            "left_shoulder",
+            "right_ear",
+            "left_ear",
+            "right_eye",
+            "left_eye",
+            "nose"
+          ],
+          "coordinate_space_input": "model_pixels",
+          "to_original": [
+            [
+              2,
+              0,
+              40
+            ],
+            [
+              0,
+              2,
+              20
+            ]
+          ],
+          "raw_box_xyxy": [
+            40,
+            20,
+            120,
+            80
+          ]
+        }
+      },
+      {
+        "candidate_id": "candidate_1",
+        "box_xyxy": [
+          40,
+          20,
+          120,
+          80
+        ],
+        "box_source": "detector",
+        "detector_score_raw": 0.93,
+        "joint_names": [
+          "nose",
+          "left_eye",
+          "right_eye",
+          "left_ear",
+          "right_ear",
+          "left_shoulder",
+          "right_shoulder",
+          "left_elbow",
+          "right_elbow",
+          "left_wrist",
+          "right_wrist",
+          "left_hip",
+          "right_hip",
+          "left_knee",
+          "right_knee",
+          "left_ankle",
+          "right_ankle"
+        ],
+        "xy_pixels": [
+          [
+            80,
+            30
+          ],
+          [
+            76,
+            28
+          ],
+          [
+            84,
+            28
+          ],
+          [
+            70,
+            30
+          ],
+          [
+            90,
+            30
+          ],
+          [
+            60,
+            50
+          ],
+          [
+            100,
+            50
+          ],
+          [
+            50,
+            60
+          ],
+          [
+            110,
+            60
+          ],
+          [
+            40,
+            70
+          ],
+          [
+            120,
+            70
+          ],
+          [
+            70,
+            70
+          ],
+          [
+            90,
+            70
+          ],
+          [
+            70,
+            80
+          ],
+          [
+            90,
+            80
+          ],
+          null,
+          null
+        ],
+        "joint_scores_raw": [
+          1.2,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          -0.2,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.8,
+          0.4,
+          0.9
+        ],
+        "invalid_reasons": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "model_missing",
+          "outside_frame"
+        ],
+        "diagnostics": {
+          "source_joint_names": [
+            "right_ankle",
+            "left_ankle",
+            "right_knee",
+            "left_knee",
+            "right_hip",
+            "left_hip",
+            "right_wrist",
+            "left_wrist",
+            "right_elbow",
+            "left_elbow",
+            "right_shoulder",
+            "left_shoulder",
+            "right_ear",
+            "left_ear",
+            "right_eye",
+            "left_eye",
+            "nose"
+          ],
+          "coordinate_space_input": "model_pixels",
+          "to_original": [
+            [
+              2,
+              0,
+              40
+            ],
+            [
+              0,
+              2,
+              20
+            ]
+          ],
+          "raw_box_xyxy": [
+            40,
+            20,
+            120,
+            80
+          ]
+        }
+      }
+    ],
+    "model_info": {
+      "kind": "simulated",
+      "pipeline_id": "pose_wrapper_demo_v1"
+    }
+  }
+}

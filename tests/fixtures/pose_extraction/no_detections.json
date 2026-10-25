@@ -1,0 +1,32 @@
+{
+  "case_id": "no_detections",
+  "image": {
+    "height": 100,
+    "width": 160,
+    "channels": 3,
+    "dtype": "uint8",
+    "colour_order": "RGB",
+    "fill": 0
+  },
+  "model_info": {
+    "kind": "simulated",
+    "pipeline_id": "pose_wrapper_demo_v1"
+  },
+  "reviewed_boxes": null,
+  "detector_outputs": [],
+  "estimator_outputs": [],
+  "expected_calls": {
+    "detector": 1,
+    "estimator": 0
+  },
+  "expected": {
+    "width": 160,
+    "height": 100,
+    "status": "no_detections",
+    "candidates": [],
+    "model_info": {
+      "kind": "simulated",
+      "pipeline_id": "pose_wrapper_demo_v1"
+    }
+  }
+}
